@@ -1,0 +1,79 @@
+# ✅ STEP 1: Install Required Libraries (Run once)
+!pip install transformers datasets evaluate scikit-learn
+
+# ✅ STEP 2: Import
+import pandas as pd
+from sklearn.preprocessing import LabelEncoder
+from datasets import Dataset
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
+import evaluate
+import numpy as np
+
+# ✅ STEP 3: Load Dataset
+df = pd.read_csv("your_dataset.csv")  # Replace with your file
+df = df[['user_message', 'emotion_label']]  # Ensure correct columns
+
+# ✅ STEP 4: Encode Emotion Labels
+label_encoder = LabelEncoder()
+df['label'] = label_encoder.fit_transform(df['emotion_label'])
+
+# ✅ STEP 5: Convert to HuggingFace Dataset
+dataset = Dataset.from_pandas(df[['user_message', 'label']])
+dataset = dataset.train_test_split(test_size=0.2)
+
+# ✅ STEP 6: Tokenization
+checkpoint = "distilbert-base-uncased"  # Smaller & fast
+tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+
+def tokenize(example):
+    return tokenizer(example["user_message"], padding="max_length", truncation=True)
+
+tokenized_ds = dataset.map(tokenize, batched=True)
+
+# ✅ STEP 7: Load Model
+model = AutoModelForSequenceClassification.from_pretrained(
+    checkpoint, num_labels=len(label_encoder.classes_)
+)
+
+# ✅ STEP 8: Training Setup
+training_args = TrainingArguments(
+    output_dir="./results",
+    evaluation_strategy="epoch",
+    save_strategy="no",
+    per_device_train_batch_size=16,   # Moderate batch size for CPU
+    per_device_eval_batch_size=32,
+    num_train_epochs=3,
+    learning_rate=2e-5,
+    logging_dir='./logs',
+    load_best_model_at_end=False,
+)
+
+# ✅ STEP 9: Metric (Accuracy)
+accuracy = evaluate.load("accuracy")
+
+def compute_metrics(eval_pred):
+    logits, labels = eval_pred
+    predictions = np.argmax(logits, axis=-1)
+    return accuracy.compute(predictions=predictions, references=labels)
+
+# ✅ STEP 10: Train the Model
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=tokenized_ds['train'],
+    eval_dataset=tokenized_ds['test'],
+    compute_metrics=compute_metrics,
+)
+
+trainer.train()
+trainer.evaluate()
+
+# ✅ STEP 11: Predict on Custom Text
+def predict_emotion(text):
+    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True)
+    outputs = model(**inputs)
+    predicted_label = torch.argmax(outputs.logits, dim=1).item()
+    return label_encoder.inverse_transform([predicted_label])[0]
+
+# Example:
+print(predict_emotion("I am really stressed today and feel anxious."))
