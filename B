@@ -72,4 +72,11 @@ def predict_emotion(text):
 # ✅ Step 14: Test Prediction
 test_text = "I feel very happy and excited today!"
 predicted_emotion = predict_emotion(test_text)
-print(f"Text: {test_text}\nPredicted Emotion: {predicted_emotion}")
+print(f"Text: {test_text}\nPredicted Emotion: {predicted_emotion
+
+
+
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+model_name = "distilbert-base-uncased"
+model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=5)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
