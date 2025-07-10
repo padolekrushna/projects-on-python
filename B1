@@ -1,0 +1,86 @@
+# 📌 Install required libraries (if not already installed)
+!pip install transformers datasets scikit-learn --quiet
+
+# 📌 Imports
+import pandas as pd
+from sklearn.preprocessing import LabelEncoder
+from datasets import Dataset
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
+import torch
+import numpy as np
+from sklearn.metrics import accuracy_score, classification_report
+
+# 📌 Load dataset
+df = pd.read_csv('your_emotion_dataset.csv')  # Replace with your filename
+df = df[['user_message', 'emotion']]  # Ensure correct column names
+
+# 📌 Encode labels
+label_encoder = LabelEncoder()
+df['label'] = label_encoder.fit_transform(df['emotion'])
+
+# 📌 Use only a small sample for quick training
+df_small = df.sample(n=500, random_state=42)  # Reduce number for speed
+
+# 📌 Convert to HuggingFace Dataset
+dataset = Dataset.from_pandas(df_small)
+
+# 📌 Load tokenizer & model (smaller version)
+model_name = "distilbert-base-uncased"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=len(label_encoder.classes_))
+
+# 📌 Tokenize data
+def tokenize(example):
+    return tokenizer(example['user_message'], truncation=True, padding='max_length', max_length=128)
+
+dataset = dataset.map(tokenize)
+dataset = dataset.rename_column("label", "labels")
+dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+
+# 📌 Train-test split
+dataset = dataset.train_test_split(test_size=0.2)
+train_dataset = dataset['train']
+eval_dataset = dataset['test']
+
+# 📌 Define compute metrics
+def compute_metrics(p):
+    preds = np.argmax(p.predictions, axis=1)
+    return {'accuracy': accuracy_score(p.label_ids, preds)}
+
+# 📌 TrainingArguments (highly optimized for speed)
+training_args = TrainingArguments(
+    output_dir="./results",
+    per_device_train_batch_size=4,
+    per_device_eval_batch_size=4,
+    num_train_epochs=1,
+    max_steps=50,  # 🔥 Limit steps
+    logging_steps=10,
+    evaluation_strategy="no",
+    save_strategy="no",
+    report_to="none"
+)
+
+# 📌 Trainer
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    compute_metrics=compute_metrics,
+)
+
+# 🚀 Train
+trainer.train()
+
+
+def predict_emotion(text):
+    model.eval()
+    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=128)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    pred = torch.argmax(outputs.logits, dim=1).item()
+    return label_encoder.inverse_transform([pred])[0]
+
+# ✅ Test
+test_text = "I feel very happy and excited today!"
+predicted = predict_emotion(test_text)
+print(f"Text: {test_text}\nPredicted Emotion: {predicted}")
