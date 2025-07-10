@@ -1,0 +1,75 @@
+# ✅ Step 1: Install Required Libraries
+!pip install -q transformers datasets scikit-learn
+
+# ✅ Step 2: Import Libraries
+import pandas as pd
+from sklearn.preprocessing import LabelEncoder
+from datasets import Dataset
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trainer, TrainingArguments
+
+# ✅ Step 3: Load Dataset (change the filename accordingly)
+df = pd.read_csv("emotion_dataset.csv")  # Make sure this file has 'user_message' and 'emotion_label' columns
+df = df[['user_message', 'emotion_label']].dropna().reset_index(drop=True)
+
+# ✅ Step 4: Rename for Hugging Face compatibility
+df.rename(columns={"user_message": "text", "emotion_label": "label"}, inplace=True)
+
+# ✅ Step 5: Encode Labels (e.g., 'joy' → 0, 'sadness' → 1, etc.)
+label_encoder = LabelEncoder()
+df['label'] = label_encoder.fit_transform(df['label'])
+
+# ✅ Step 6: Convert to Hugging Face Dataset
+dataset = Dataset.from_pandas(df[['text', 'label']])
+
+# ✅ Step 7: Load BERT Tokenizer
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+
+# ✅ Step 8: Tokenize and Add 'labels'
+def tokenize_function(example):
+    tokens = tokenizer(example["text"], padding="max_length", truncation=True, max_length=128)
+    tokens["labels"] = example["label"]
+    return tokens
+
+tokenized_dataset = dataset.map(tokenize_function, batched=True)
+tokenized_dataset = tokenized_dataset.remove_columns(["text", "label"])
+tokenized_dataset.set_format("torch")
+
+# ✅ Step 9: Load BERT Model for Classification
+num_labels = len(label_encoder.classes_)
+model = AutoModelForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=num_labels)
+
+# ✅ Step 10: Define Training Arguments
+training_args = TrainingArguments(
+    output_dir="./results",
+    evaluation_strategy="epoch",
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    num_train_epochs=3,
+    weight_decay=0.01,
+    logging_dir="./logs",
+    logging_steps=10,
+)
+
+# ✅ Step 11: Initialize Trainer
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=tokenized_dataset,
+    eval_dataset=tokenized_dataset
+)
+
+# ✅ Step 12: Train the Model
+trainer.train()
+
+# ✅ Step 13: Predict Emotion for New Text
+def predict_emotion(text):
+    model.eval()
+    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=128)
+    outputs = model(**inputs)
+    pred = outputs.logits.argmax(dim=1).item()
+    return label_encoder.inverse_transform([pred])[0]
+
+# ✅ Step 14: Test Prediction
+test_text = "I feel very happy and excited today!"
+predicted_emotion = predict_emotion(test_text)
+print(f"Text: {test_text}\nPredicted Emotion: {predicted_emotion}")
