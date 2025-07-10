@@ -1,0 +1,97 @@
+import torch
+print("GPU Available:", torch.cuda.is_available())
+print("GPU Name:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No GPU")
+
+# ✅ Install dependencies if not already done (only once)
+!pip install -q transformers datasets accelerate evaluate
+
+# ✅ Imports
+import pandas as pd
+import torch
+from datasets import Dataset
+from transformers import DistilBertTokenizerFast, DistilBertForSequenceClassification
+from transformers import TrainingArguments, Trainer
+import evaluate
+
+# ✅ GPU Check
+print("✅ CUDA Available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("Using GPU:", torch.cuda.get_device_name(0))
+else:
+    print("⚠️ GPU not detected. Training will be slow on CPU.")
+
+# ✅ Load your dataset (make sure it has 'user_message' and 'emotion_label')
+df = pd.read_csv("data.csv")
+df = df.dropna(subset=["user_message", "emotion_label"])
+df = df.rename(columns={"user_message": "message", "emotion_label": "emotion"})
+
+# ✅ Encode labels
+emotions = sorted(df["emotion"].unique())
+emotion2id = {emotion: i for i, emotion in enumerate(emotions)}
+id2emotion = {i: emotion for emotion, i in emotion2id.items()}
+df["label"] = df["emotion"].map(emotion2id)
+
+# ✅ Hugging Face Dataset Conversion
+dataset = Dataset.from_pandas(df[["message", "label"]]).shuffle(seed=42)
+split = dataset.train_test_split(test_size=0.2)
+train_ds, val_ds = split["train"], split["test"]
+
+# ✅ Tokenization
+tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
+def tokenize(batch):
+    return tokenizer(batch["message"], padding="max_length", truncation=True, max_length=128)
+
+train_ds = train_ds.map(tokenize, batched=True)
+val_ds = val_ds.map(tokenize, batched=True)
+train_ds.set_format("torch", columns=["input_ids", "attention_mask", "label"])
+val_ds.set_format("torch", columns=["input_ids", "attention_mask", "label"])
+
+# ✅ Model
+model = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased", num_labels=len(emotions))
+
+# ✅ Accuracy Metric
+accuracy = evaluate.load("accuracy")
+def compute_metrics(eval_pred):
+    logits, labels = eval_pred
+    preds = logits.argmax(-1)
+    return accuracy.compute(predictions=preds, references=labels)
+
+# ✅ Training Configurations
+training_args = TrainingArguments(
+    output_dir="./emotion_model",
+    evaluation_strategy="epoch",
+    save_strategy="epoch",
+    num_train_epochs=3,
+    per_device_train_batch_size=32,
+    per_device_eval_batch_size=64,
+    load_best_model_at_end=True,
+    metric_for_best_model="accuracy",
+    save_total_limit=1,
+    fp16=torch.cuda.is_available(),  # Use mixed precision only if GPU
+    logging_dir="./logs",
+    report_to="none"
+)
+
+# ✅ Trainer
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_ds,
+    eval_dataset=val_ds,
+    tokenizer=tokenizer,
+    compute_metrics=compute_metrics
+)
+
+# ✅ Train
+trainer.train()
+
+# ✅ Evaluate
+results = trainer.evaluate()
+print("✅ Final Evaluation:", results)
+
+# ✅ Save model
+model.save_pretrained("./emotion_model")
+tokenizer.save_pretrained("./emotion_model")
+with open("emotion_labels.txt", "w") as f:
+    for k, v in id2emotion.items():
+        f.write(f"{k}:{v}\n")
